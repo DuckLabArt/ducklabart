@@ -457,35 +457,45 @@ function showToast(msg, type='') {
 async function loadFiles() {
   const area = document.getElementById('fileListArea');
   area.innerHTML = '<div class="loading-state"><div class="spinner"></div>Đang tải danh sách file...</div>';
-  try {
-    let offset = 0, messages = [], hasMore = true;
-    while (hasMore) {
-      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${offset}&limit=100`);
-      const data = await res.json();
-      if (!data.ok || data.result.length === 0) { hasMore = false; break; }
-      messages = messages.concat(data.result);
-      offset = data.result[data.result.length - 1].update_id + 1;
-      if (data.result.length < 100) hasMore = false;
+  const maxRetries = 3;
+  let lastError = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      let offset = 0, messages = [], hasMore = true;
+      while (hasMore) {
+        const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${offset}&limit=100`, { timeout: 15000 });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.description || 'API error');
+        if (data.result.length === 0) { hasMore = false; break; }
+        messages = messages.concat(data.result);
+        offset = data.result[data.result.length - 1].update_id + 1;
+        if (data.result.length < 100) hasMore = false;
+      }
+      allFiles = [];
+      for (const update of messages) {
+        const msg = update.message || update.channel_post;
+        if (!msg) continue;
+        const fileObj = msg.document || msg.photo?.[msg.photo.length-1] || msg.video || msg.audio || msg.voice;
+        if (!fileObj) continue;
+        const name = fileObj.file_name || (msg.photo ? 'photo_' + fileObj.file_unique_id + '.jpg' : 'file_' + fileObj.file_unique_id);
+        allFiles.push({
+          fileId: fileObj.file_id, fileUniqueId: fileObj.file_unique_id,
+          name, size: fileObj.file_size || 0, mimeType: fileObj.mime_type || '',
+          date: msg.date, type: getFileType(name, fileObj.mime_type),
+          msgId: msg.message_id, isPhoto: !!msg.photo
+        });
+      }
+      allFiles.sort((a,b) => b.date - a.date);
+      updateStats(); 
+      renderFiles();
+      return;
+    } catch(e) {
+      lastError = e;
+      if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
     }
-    allFiles = [];
-    for (const update of messages) {
-      const msg = update.message || update.channel_post;
-      if (!msg) continue;
-      const fileObj = msg.document || msg.photo?.[msg.photo.length-1] || msg.video || msg.audio || msg.voice;
-      if (!fileObj) continue;
-      const name = fileObj.file_name || (msg.photo ? 'photo_' + fileObj.file_unique_id + '.jpg' : 'file_' + fileObj.file_unique_id);
-      allFiles.push({
-        fileId: fileObj.file_id, fileUniqueId: fileObj.file_unique_id,
-        name, size: fileObj.file_size || 0, mimeType: fileObj.mime_type || '',
-        date: msg.date, type: getFileType(name, fileObj.mime_type),
-        msgId: msg.message_id, isPhoto: !!msg.photo
-      });
-    }
-    allFiles.sort((a,b) => b.date - a.date);
-    updateStats(); renderFiles();
-  } catch(e) {
-    area.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Không thể tải file</div><div class="empty-sub">Kiểm tra kết nối và thử lại</div></div>';
   }
+  area.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Không thể tải file</div><div class="empty-sub">' + lastError.message + '</div></div>';
 }
 
 function updateStats() {
@@ -569,18 +579,44 @@ async function downloadFile(e, fileId, name) {
   showToast('Đang chuẩn bị tải...', '');
   try {
     const url = await getFileUrl(fileId);
-    const res = await fetch(url);
-    const blob = await res.blob();
+    const xhr = new XMLHttpRequest();
+    xhr.timeout = 300000;
+    xhr.responseType = 'blob';
+    let lastTime = Date.now();
+    let lastLoaded = 0;
+    
+    await new Promise((resolve, reject) => {
+      xhr.onprogress = (e) => {
+        const now = Date.now();
+        if (now - lastTime > 500) {
+          const speed = (e.loaded - lastLoaded) / ((now - lastTime) / 1000) / 1024 / 1024;
+          const remaining = (e.total - e.loaded) / (speed * 1024 * 1024);
+          showToast(`Tải: ${Math.round(e.loaded/e.total*100)}% (${speed.toFixed(1)}MB/s)`, '');
+          lastTime = now;
+          lastLoaded = e.loaded;
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status === 200) resolve(xhr.response);
+        else reject(new Error(`HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.ontimeout = () => reject(new Error('Download timeout'));
+      xhr.open('GET', url, true);
+      xhr.send();
+    });
+    
+    const blob = xhr.response;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = name;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
-    showToast('Đã tải xuống: ' + name, 'success');
+    setTimeout(() => URL.revokeObjectURL(a.href), 100);
+    showToast('✓ Đã tải: ' + name, 'success');
   } catch(err) {
-    showToast('Lỗi tải xuống: ' + err.message, 'error');
+    showToast('❌ Lỗi: ' + err.message, 'error');
   }
 }
 
@@ -670,18 +706,29 @@ async function handleFiles(files) {
       else if (mime.startsWith('audio/')) { endpoint = 'sendAudio'; formData.append('audio', file); }
       else formData.append('document', file);
       const xhr = new XMLHttpRequest();
+      xhr.timeout = 120000;
       await new Promise((resolve, reject) => {
         xhr.upload.onprogress = e => { if (e.lengthComputable) fill.style.width = Math.round(e.loaded/e.total*100)+'%'; };
-        xhr.onload = () => { const d = JSON.parse(xhr.responseText); d.ok ? resolve(d) : reject(new Error(d.description)); };
-        xhr.onerror = reject;
-        xhr.open('POST', `https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`);
+        xhr.onload = () => { 
+          try {
+            const d = JSON.parse(xhr.responseText); 
+            d.ok ? resolve(d) : reject(new Error(d.description || 'Lỗi API'));
+          } catch(err) { reject(new Error('Response không hợp lệ')); }
+        };
+        xhr.onerror = () => reject(new Error('Lỗi kết nối'));
+        xhr.ontimeout = () => reject(new Error('Upload timeout'));
+        xhr.open('POST', `https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`, true);
         xhr.send(formData);
       });
       fill.style.width = '100%';
       showToast(`✓ ${file.name}`, 'success');
+      await new Promise(r => setTimeout(r, 300));
     } catch(e) { showToast(`Lỗi: ${file.name} — ${e.message}`, 'error'); }
   }
-  setTimeout(() => { progress.classList.remove('visible'); fill.style.width='0%'; loadFiles(); }, 800);
+  progress.classList.remove('visible'); 
+  fill.style.width='0%';
+  await new Promise(r => setTimeout(r, 500));
+  await loadFiles();
 }
 
 // ===== CHAT =====
