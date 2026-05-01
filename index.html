@@ -226,14 +226,8 @@ input[type="file"] { display: none; }
     Telegram <span>Drive</span>
   </div>
 
-  <div style="display:flex;flex-direction:column;gap:0;width:100%;max-width:420px">
-    <div class="auth-tabs" style="margin-bottom:1rem;align-self:center">
-      <button class="auth-tab active" onclick="switchAuthTab('login')">Đăng nhập</button>
-      <button class="auth-tab" onclick="switchAuthTab('register')">Tạo tài khoản</button>
-    </div>
-
-    <!-- Login form -->
-    <div id="loginForm" class="auth-card">
+  <div style="width:100%;max-width:420px">
+    <div class="auth-card">
       <h2>🔐 Đăng nhập</h2>
       <div class="input-group">
         <label>Tên đăng nhập</label>
@@ -245,39 +239,9 @@ input[type="file"] { display: none; }
       </div>
       <button class="btn-primary" id="loginBtn" onclick="doLogin()">Đăng nhập →</button>
     </div>
-
-    <!-- Register form -->
-    <div id="registerForm" class="auth-card" style="display:none">
-      <h2>✨ Tạo tài khoản mới</h2>
-      <div class="input-group">
-        <label>Tên đăng nhập</label>
-        <input type="text" id="regUser" placeholder="username" autocomplete="username" />
-      </div>
-      <div class="input-group">
-        <label>Mật khẩu</label>
-        <input type="password" id="regPass" placeholder="Tối thiểu 6 ký tự" autocomplete="new-password" />
-      </div>
-      <div class="input-group">
-        <label>Xác nhận mật khẩu</label>
-        <input type="password" id="regPass2" placeholder="Nhập lại mật khẩu" autocomplete="new-password" />
-      </div>
-
-      <div class="divider"><span>Thông tin Telegram Bot</span></div>
-
-      <div class="input-group">
-        <label>Bot Token</label>
-        <input type="password" id="regToken" placeholder="123456789:ABCdef..." />
-      </div>
-      <div class="input-group">
-        <label>Chat ID (Channel)</label>
-        <input type="text" id="regChatId" placeholder="-1001234567890" />
-      </div>
-      <button class="btn-primary" id="regBtn" onclick="doRegister()">Tạo tài khoản →</button>
-      <p class="hint" style="margin-top:1rem">Token được mã hóa bằng mật khẩu của bạn<br>Không ai khác có thể đọc được</p>
-    </div>
   </div>
 
-  <p class="hint">Dữ liệu lưu trong trình duyệt, không gửi về server nào</p>
+  <p class="hint">Dữ liệu lưu cục bộ · Không gửi về server nào</p>
 </div>
 
 <!-- ===== MAIN APP ===== -->
@@ -418,77 +382,32 @@ async function hashPassword(pass, salt) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
 
+// ===== BUILT-IN ACCOUNTS =====
+const ACCOUNTS = {
+  'ciuducvoi': { pass: '#Nguyenduc150203', token: '8712068191:AAFA-ufuT1xnsW9ZK8sj5F8VwQeCQFkPk6w', chatId: '-1003959348210' },
+  'vuonluon':  { pass: 'vuonluon123',      token: '8712068191:AAFA-ufuT1xnsW9ZK8sj5F8VwQeCQFkPk6w', chatId: '-1003959348210' },
+};
+
 // ===== AUTH =====
-function switchAuthTab(tab) {
-  document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (i===0) === (tab==='login')));
-  document.getElementById('loginForm').style.display = tab === 'login' ? 'block' : 'none';
-  document.getElementById('registerForm').style.display = tab === 'register' ? 'block' : 'none';
-}
-
-async function doRegister() {
-  const username = document.getElementById('regUser').value.trim();
-  const pass = document.getElementById('regPass').value;
-  const pass2 = document.getElementById('regPass2').value;
-  const token = document.getElementById('regToken').value.trim();
-  const chatId = document.getElementById('regChatId').value.trim();
-
-  if (!username || !pass || !token || !chatId) return showToast('Vui lòng điền đầy đủ thông tin', 'error');
-  if (pass.length < 6) return showToast('Mật khẩu tối thiểu 6 ký tự', 'error');
-  if (pass !== pass2) return showToast('Mật khẩu không khớp', 'error');
-  if (localStorage.getItem('tgd_user_' + username)) return showToast('Tên đăng nhập đã tồn tại', 'error');
-
-  const btn = document.getElementById('regBtn');
-  btn.disabled = true; btn.textContent = 'Đang kiểm tra...';
-
-  // Verify bot token
-  try {
-    const r = await fetch(`https://api.telegram.org/bot${token}/getMe`);
-    const d = await r.json();
-    if (!d.ok) { showToast('Bot Token không hợp lệ!', 'error'); btn.disabled = false; btn.textContent = 'Tạo tài khoản →'; return; }
-  } catch(e) { showToast('Lỗi kết nối', 'error'); btn.disabled = false; btn.textContent = 'Tạo tài khoản →'; return; }
-
-  const salt = username + '_tgdrive_salt';
-  const passHash = await hashPassword(pass, salt);
-  const encrypted = await encryptData({ token, chatId }, pass, salt);
-
-  localStorage.setItem('tgd_user_' + username, JSON.stringify({ passHash, encrypted }));
-  showToast('Tạo tài khoản thành công! Hãy đăng nhập', 'success');
-  btn.disabled = false; btn.textContent = 'Tạo tài khoản →';
-  switchAuthTab('login');
-  document.getElementById('loginUser').value = username;
-}
-
 async function doLogin() {
-  const username = document.getElementById('loginUser').value.trim();
+  const username = document.getElementById('loginUser').value.trim().toLowerCase();
   const pass = document.getElementById('loginPass').value;
-  if (!username || !pass) return showToast('Nhập username và mật khẩu', 'error');
-
-  const stored = localStorage.getItem('tgd_user_' + username);
-  if (!stored) return showToast('Tài khoản không tồn tại', 'error');
+  if (!username || !pass) return showToast('Nhập tài khoản và mật khẩu', 'error');
 
   const btn = document.getElementById('loginBtn');
   btn.disabled = true; btn.textContent = 'Đang xác thực...';
 
-  try {
-    const { passHash, encrypted } = JSON.parse(stored);
-    const salt = username + '_tgdrive_salt';
-    const inputHash = await hashPassword(pass, salt);
-    if (inputHash !== passHash) { showToast('Sai mật khẩu', 'error'); btn.disabled = false; btn.textContent = 'Đăng nhập →'; return; }
+  const acc = ACCOUNTS[username];
+  if (!acc) { showToast('Tài khoản không tồn tại', 'error'); btn.disabled = false; btn.textContent = 'Đăng nhập →'; return; }
+  if (pass !== acc.pass) { showToast('Sai mật khẩu', 'error'); btn.disabled = false; btn.textContent = 'Đăng nhập →'; return; }
 
-    const { token, chatId } = await decryptData(encrypted, pass, salt);
-    BOT_TOKEN = token; CHAT_ID = chatId; currentUser = username;
+  BOT_TOKEN = acc.token; CHAT_ID = acc.chatId; currentUser = username;
+  sessionStorage.setItem('tgd_tmp_token', acc.token);
+  sessionStorage.setItem('tgd_tmp_chat', acc.chatId);
+  sessionStorage.setItem('tgd_tmp_user', username);
 
-    // Save session (token NOT stored in session, re-decrypted each login)
-    sessionStorage.setItem('tgd_session', JSON.stringify({ username }));
-    // For "remember me" across page refresh but same session
-    sessionStorage.setItem('tgd_tmp_token', token);
-    sessionStorage.setItem('tgd_tmp_chat', chatId);
-
-    showMainApp(username);
-    showToast('Chào mừng ' + username + '!', 'success');
-  } catch(e) {
-    showToast('Lỗi xác thực', 'error');
-  }
+  showMainApp(username);
+  showToast('Chào mừng ' + username + '!', 'success');
   btn.disabled = false; btn.textContent = 'Đăng nhập →';
 }
 
@@ -506,6 +425,7 @@ function doLogout() {
   sessionStorage.clear();
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('mainApp').style.display = 'none';
+  document.getElementById('loginUser').value = '';
   document.getElementById('loginPass').value = '';
 }
 
@@ -880,13 +800,12 @@ function handleChatKey(e) {
 
 // ===== SESSION RESTORE =====
 (function() {
-  const sess = sessionStorage.getItem('tgd_session');
   const tmpToken = sessionStorage.getItem('tgd_tmp_token');
   const tmpChat = sessionStorage.getItem('tgd_tmp_chat');
-  if (sess && tmpToken && tmpChat) {
-    const { username } = JSON.parse(sess);
-    BOT_TOKEN = tmpToken; CHAT_ID = tmpChat; currentUser = username;
-    showMainApp(username);
+  const tmpUser = sessionStorage.getItem('tgd_tmp_user');
+  if (tmpToken && tmpChat && tmpUser) {
+    BOT_TOKEN = tmpToken; CHAT_ID = tmpChat; currentUser = tmpUser;
+    showMainApp(tmpUser);
   }
 })();
 </script>
