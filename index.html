@@ -535,7 +535,7 @@ function renderFiles() {
         </div>
       </div>
       <div class="card-actions">
-        <button class="card-btn dl" onclick="event.stopPropagation();downloadFile('${f.fileId}','${f.name}')" title="Tải xuống">⬇</button>
+        <button class="card-btn dl" onclick="event.stopPropagation();downloadFile(event,'${f.fileId}','${f.name}')" title="Tải xuống">⬇</button>
         <button class="card-btn del" onclick="event.stopPropagation();deleteFile('${f.fileId}','${f.msgId}',this.closest('.file-card'))" title="Xóa">✕</button>
       </div>
     `;
@@ -564,16 +564,23 @@ async function loadThumb(f, card) {
   } catch(e) {}
 }
 
-// ===== DOWNLOAD - ĐÃ SỬA: dùng window.open thay vì fetch =====
-async function downloadFile(fileId, name) {
+// ===== DOWNLOAD =====
+async function downloadFile(e, fileId, name) {
   showToast('Đang chuẩn bị tải...', '');
   try {
     const url = await getFileUrl(fileId);
-    // Mở link trực tiếp trong tab mới, trình duyệt sẽ tự tải xuống
-    window.open(url, '_blank');
-    showToast('Đã mở tab tải: ' + name, 'success');
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    showToast('Đã tải xuống: ' + name, 'success');
   } catch(err) {
-    showToast('Lỗi lấy link: ' + err.message, 'error');
+    showToast('Lỗi tải xuống: ' + err.message, 'error');
   }
 }
 
@@ -597,7 +604,7 @@ async function previewFile(f) {
           <div style="font-size:52px;margin-bottom:16px">${f.type==='doc'?'📄':'📦'}</div>
           <p style="color:#c8c8d8;font-size:15px;font-weight:500;margin-bottom:6px">${f.name}</p>
           <p style="color:#333355;font-size:12px;margin-bottom:24px">${formatSize(f.size)}</p>
-          <button class="modal-dl-btn" onclick="downloadFile('${f.fileId}','${f.name}')">⬇ Tải xuống</button>
+          <button class="modal-dl-btn" onclick="downloadFile(null,'${f.fileId}','${f.name}')">⬇ Tải xuống</button>
         </div>`;
     }
     title.textContent = f.name + ' · ' + formatSize(f.size);
@@ -746,7 +753,7 @@ function renderChat() {
     if (msg.file) {
       html += `<div class="chat-msg ${isMine ? 'mine' : 'theirs'}">
         ${!isMine ? `<div class="chat-sender">${msg.from}</div>` : ''}
-        <div class="chat-file-msg" onclick="downloadFile('${msg.fileId}','${msg.file}')">
+        <div class="chat-file-msg" onclick="downloadFile(null,'${msg.fileId}','${msg.file}')">
           <span>📎</span><span>${msg.file}</span>
         </div>
         <div class="chat-meta">${time}</div>
