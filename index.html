@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Telegram Drive - Fixed</title>
+<title>Telegram Drive</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -347,45 +347,10 @@ input[type="file"] { display: none; }
 </div>
 
 <script>
-// ===== CORS PROXY (fix all API calls) =====
-const CORS_PROXY = 'https://corsproxy.io/';
-
-async function proxyFetch(url, options = {}) {
-  const proxyUrl = CORS_PROXY + encodeURIComponent(url);
-  const res = await fetch(proxyUrl, {
-    ...options,
-    headers: {
-      ...options.headers,
-      'Origin': location.origin,
-      'X-Requested-With': 'XMLHttpRequest'
-    }
-  });
-  return res;
-}
-
-// Helper for POST with JSON
-async function apiPost(endpoint, bodyObj) {
-  const url = `https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`;
-  const res = await proxyFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(bodyObj)
-  });
-  return res.json();
-}
-
-// Helper for GET
-async function apiGet(endpoint, params = {}) {
-  const url = new URL(`https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`);
-  Object.keys(params).forEach(k => url.searchParams.append(k, params[k]));
-  const res = await proxyFetch(url.toString());
-  return res.json();
-}
-
 // ===== STATE =====
 let BOT_TOKEN = '', CHAT_ID = '', allFiles = [], currentFilter = 'all', currentUser = '';
 
-// ===== CRYPTO HELPERS (giữ nguyên) =====
+// ===== CRYPTO HELPERS =====
 async function deriveKey(password, salt) {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -495,7 +460,8 @@ async function loadFiles() {
   try {
     let offset = 0, messages = [], hasMore = true;
     while (hasMore) {
-      const data = await apiGet('getUpdates', { offset, limit: 100 });
+      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${offset}&limit=100`);
+      const data = await res.json();
       if (!data.ok || data.result.length === 0) { hasMore = false; break; }
       messages = messages.concat(data.result);
       offset = data.result[data.result.length - 1].update_id + 1;
@@ -518,7 +484,6 @@ async function loadFiles() {
     allFiles.sort((a,b) => b.date - a.date);
     updateStats(); renderFiles();
   } catch(e) {
-    console.error(e);
     area.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-title">Không thể tải file</div><div class="empty-sub">Kiểm tra kết nối và thử lại</div></div>';
   }
 }
@@ -584,9 +549,10 @@ async function getFileUrl(f_or_id) {
   const fileId = typeof f_or_id === 'string' ? f_or_id : f_or_id.fileId;
   const f = typeof f_or_id === 'object' ? f_or_id : null;
   if (f && f.url) return f.url;
-  const data = await apiGet('getFile', { file_id: fileId });
-  if (!data.ok) throw new Error('Cannot get file');
-  const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${data.result.file_path}`;
+  const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`);
+  const d = await r.json();
+  if (!d.ok) throw new Error('Cannot get file');
+  const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${d.result.file_path}`;
   if (f) f.url = url;
   return url;
 }
@@ -598,15 +564,16 @@ async function loadThumb(f, card) {
   } catch(e) {}
 }
 
-// ===== DOWNLOAD (fixed: no fetch, open directly) =====
+// ===== DOWNLOAD - ĐÃ SỬA: dùng window.open thay vì fetch =====
 async function downloadFile(fileId, name) {
+  showToast('Đang chuẩn bị tải...', '');
   try {
     const url = await getFileUrl(fileId);
-    // Mở tab mới để tải file (không bị CORS)
+    // Mở link trực tiếp trong tab mới, trình duyệt sẽ tự tải xuống
     window.open(url, '_blank');
-    showToast(`Đang mở: ${name}`, 'success');
+    showToast('Đã mở tab tải: ' + name, 'success');
   } catch(err) {
-    showToast('Lỗi lấy link tải: ' + err.message, 'error');
+    showToast('Lỗi lấy link: ' + err.message, 'error');
   }
 }
 
@@ -647,20 +614,24 @@ function closeModal(e) {
   document.getElementById('modalBody').innerHTML = '';
 }
 
-// ===== DELETE (with proxy) =====
+// ===== DELETE =====
 async function deleteFile(fileId, msgId, card) {
   if (!confirm('Xoá file này?')) return;
   try {
-    const data = await apiPost('deleteMessage', { chat_id: CHAT_ID, message_id: parseInt(msgId) });
-    if (data.ok) {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ chat_id: CHAT_ID, message_id: parseInt(msgId) })
+    });
+    const d = await r.json();
+    if (d.ok) {
       card.style.opacity = '0'; card.style.transform = 'scale(0.8)'; card.style.transition = 'all 0.3s';
       setTimeout(() => { card.remove(); loadFiles(); }, 300);
       showToast('Đã xoá file', 'success');
-    } else { showToast('Không thể xoá: ' + (data.description||''), 'error'); }
+    } else { showToast('Không thể xoá: ' + (d.description||''), 'error'); }
   } catch(e) { showToast('Lỗi khi xoá', 'error'); }
 }
 
-// ===== UPLOAD (with proxy - using XMLHttpRequest) =====
+// ===== UPLOAD =====
 function toggleUploadZone() {
   document.getElementById('uploadZone').classList.toggle('visible');
 }
@@ -691,19 +662,12 @@ async function handleFiles(files) {
       else if (mime.startsWith('video/')) { endpoint = 'sendVideo'; formData.append('video', file); }
       else if (mime.startsWith('audio/')) { endpoint = 'sendAudio'; formData.append('audio', file); }
       else formData.append('document', file);
-      
-      const proxyUrl = CORS_PROXY + encodeURIComponent(`https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`);
+      const xhr = new XMLHttpRequest();
       await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
         xhr.upload.onprogress = e => { if (e.lengthComputable) fill.style.width = Math.round(e.loaded/e.total*100)+'%'; };
-        xhr.onload = () => { 
-          let d;
-          try { d = JSON.parse(xhr.responseText); } catch(e) { reject(e); }
-          d && d.ok ? resolve(d) : reject(new Error(d?.description || 'Upload lỗi'));
-        };
-        xhr.onerror = () => reject(new Error('Network error'));
-        xhr.open('POST', proxyUrl);
-        xhr.setRequestHeader('Origin', location.origin);
+        xhr.onload = () => { const d = JSON.parse(xhr.responseText); d.ok ? resolve(d) : reject(new Error(d.description)); };
+        xhr.onerror = reject;
+        xhr.open('POST', `https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`);
         xhr.send(formData);
       });
       fill.style.width = '100%';
@@ -713,7 +677,7 @@ async function handleFiles(files) {
   setTimeout(() => { progress.classList.remove('visible'); fill.style.width='0%'; loadFiles(); }, 800);
 }
 
-// ===== CHAT (with proxy) =====
+// ===== CHAT =====
 let chatOpen = false, chatMessages = [], chatPolling = null;
 
 function toggleChat() {
@@ -743,7 +707,8 @@ async function loadChatMessages() {
   try {
     let offset = 0, updates = [], hasMore = true;
     while (hasMore) {
-      const data = await apiGet('getUpdates', { offset, limit: 100 });
+      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${offset}&limit=100`);
+      const data = await res.json();
       if (!data.ok || data.result.length === 0) { hasMore = false; break; }
       updates = updates.concat(data.result);
       offset = data.result[data.result.length - 1].update_id + 1;
@@ -806,13 +771,17 @@ async function sendMessage() {
   const btn = document.getElementById('chatSendBtn');
   btn.disabled = true;
   try {
-    const data = await apiPost('sendMessage', { chat_id: CHAT_ID, text });
-    if (data.ok) {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ chat_id: CHAT_ID, text })
+    });
+    const d = await r.json();
+    if (d.ok) {
       input.value = '';
       input.style.height = 'auto';
       await loadChatMessages();
       document.getElementById('chatMessages').scrollTop = 999999;
-    } else { showToast('Lỗi gửi: ' + (data.description||''), 'error'); }
+    } else { showToast('Lỗi gửi: ' + (d.description||''), 'error'); }
   } catch(e) { showToast('Lỗi gửi tin', 'error'); }
   btn.disabled = false;
   input.focus();
